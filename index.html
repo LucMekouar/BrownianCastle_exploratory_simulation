@@ -47,11 +47,11 @@
 
       <div class="viz-footer">
         <label class="toggle">
-          <input id="toggleBrick" type="checkbox" />
+          <input id="toggleBrick" type="checkbox" checked />
           <span>Brick view (show last M updates as blocks)</span>
         </label>
         <label class="toggle">
-          <input id="toggleSurface" type="checkbox" checked />
+          <input id="toggleSurface" type="checkbox" />
           <span>Surface profile overlay</span>
         </label>
       </div>
@@ -81,8 +81,8 @@
       <div class="control">
         <label for="mBlocks">Blocks shown (M) — for Brick view</label>
         <div class="row">
-          <input id="mBlocks" type="range" min="200" max="50000" step="100" value="8000" />
-          <output id="mBlocksVal" class="mono">8000</output>
+          <input id="mBlocks" type="range" min="200" max="200000" step="500" value="60000" />
+          <output id="mBlocksVal" class="mono">60000</output>
         </div>
         <p class="hint">Brick view draws only the most recent M updates (constant memory).</p>
       </div>
@@ -130,7 +130,7 @@
 
         <div class="control">
           <label class="toggle">
-            <input id="subtractDrift" type="checkbox" checked />
+            <input id="subtractDrift" type="checkbox" />
             <span>Subtract mean growth (centering)</span>
           </label>
           <p class="hint">

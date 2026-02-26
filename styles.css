@@ -85,7 +85,7 @@ body{
   height: auto;
   border-radius: calc(var(--radius) - 6px);
   border: 1px solid rgba(255,255,255,0.08);
-  background: #060a12;
+  background: #ffffff;
   display:block;
 }
 

@@ -12,6 +12,27 @@
 
 const $ = (sel) => /** @type {HTMLElement} */ (document.querySelector(sel));
 
+const clamp01 = (t) => Math.max(0, Math.min(1, t));
+const lerp = (a, b, t) => a + (b - a) * t;
+
+/** Piecewise linear gradient: green -> purple -> blue (castle palette).
+ *  t in [0,1], where t=0 is oldest and t=1 is newest.
+ */
+function castleRGB(t) {
+  t = clamp01(t);
+  const c0 = [72, 170, 102];   // green
+  const c1 = [176, 102, 204];  // purple
+  const c2 = [96, 142, 230];   // blue
+  let a, b, u;
+  if (t < 0.55) { a = c0; b = c1; u = t / 0.55; }
+  else { a = c1; b = c2; u = (t - 0.55) / 0.45; }
+  return [
+    Math.round(lerp(a[0], b[0], u)),
+    Math.round(lerp(a[1], b[1], u)),
+    Math.round(lerp(a[2], b[2], u)),
+  ];
+}
+
 // --------- Small deterministic PRNG (mulberry32) ----------
 // We hash an arbitrary seed string → uint32 then use mulberry32.
 function xmur3(str) {
@@ -202,7 +223,7 @@ class CanvasView {
 
   clear() {
     const ctx = this.ctx;
-    ctx.fillStyle = "#060a12";
+    ctx.fillStyle = "#ffffff";
     ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
   }
 
@@ -235,7 +256,7 @@ class CanvasView {
 
     // Draw faint grid
     ctx.save();
-    ctx.strokeStyle = "rgba(255,255,255,0.06)";
+    ctx.strokeStyle = "rgba(0,0,0,0.06)";
     ctx.lineWidth = 1;
     const gridN = 6;
     for (let k = 1; k < gridN; k++) {
@@ -250,7 +271,7 @@ class CanvasView {
     // Polyline.
     ctx.save();
     ctx.lineWidth = Math.max(1, 1.5 * this.pixelRatio);
-    ctx.strokeStyle = "rgba(110,168,254,0.95)";
+    ctx.strokeStyle = "rgba(96,142,230,0.95)";
     ctx.beginPath();
     for (let i = 0; i < heights.length; i++) {
       const x = (i + 0.5) * scaleX;
@@ -266,7 +287,7 @@ class CanvasView {
     const y0 = H - (0 - yMin) * scaleY;
     if (y0 >= 0 && y0 <= H) {
       ctx.save();
-      ctx.strokeStyle = "rgba(255,255,255,0.10)";
+      ctx.strokeStyle = "rgba(0,0,0,0.10)";
       ctx.beginPath();
       ctx.moveTo(0, y0);
       ctx.lineTo(W, y0);
@@ -316,18 +337,18 @@ class CanvasView {
     for (let k = 0; k < events.length; k++) {
       const ev = events[k];
       const age01 = (newestIdx - ev.idx) / span; // 0=newest, 1=oldest
-      const alpha = 1.0 - age01;
+      const alphaTmp = 1.0 - age01;
       const x = (ev.x + 0.5) * scaleX;
       const yVal = ev.y - (opts.center ? opts.centerValue : 0);
       const y = H - (yVal - yMin) * scaleY;
 
-      // Color by type (L,C,R)
-      ctx.fillStyle =
-        ev.type === 1 ? `rgba(255,255,255,${0.12 + 0.75 * alpha})` :
-        ev.type === 0 ? `rgba(110,168,254,${0.10 + 0.75 * alpha})` :
-                        `rgba(255,179,71,${0.10 + 0.75 * alpha})`;
+      // Color by age (old→green, new→blue) with a tiny height tint.
+      // This matches the “Brownian Castle” look: dense point clouds with a vertical colour drift.
+      const rgb = castleRGB(1.0 - age01);
+      const alpha = 0.20 + 0.65 * (1.0 - 0.35 * age01); // keep older points visible
+      ctx.fillStyle = `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${alpha})`;
 
-      const s = Math.max(1, 2.0 * this.pixelRatio);
+      const s = Math.max(1, 1.6 * this.pixelRatio);
       ctx.fillRect(x - s/2, y - s/2, s, s);
     }
     ctx.restore();
