@@ -31,10 +31,6 @@ The visualisation is a “brick view” point cloud (the castle look), optionall
 ## Live demo (GitHub Pages)
 
 Once Pages is enabled, your demo should be available at:
-
-`https://<your-username>.github.io/<repo-name>/`
-
-Example (for this repo name):  
 `https://lucmekouar.github.io/BC_simulation/`
 
 ---
