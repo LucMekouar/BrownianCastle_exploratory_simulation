@@ -1,28 +1,33 @@
 // Brownian Castle / β-Ballistic Deposition simulator
 // ---------------------------------------------------
 // Range-R extension implemented as additional Poisson clocks:
-// For each site x, there are 2R neighbour clocks (±1..±R) and a +1 clock.
 //
-// When a clock "rings", it proposes a candidate height y_i.
-// We choose among candidates via softmax:
-//   P(i) ∝ r_i * exp(β y_i)
-// Then set h(x) ← y_i.
+// For each site x:
+//   - a center “+1” clock proposes y0 = h(x)+1
+//   - for each k=1..R:
+//       right-k clock proposes y(+k) = g(h(x), h(x+k))
+//       left-k  clock proposes y(-k) = g(h(x), h(x-k))
 //
-// Averaging checkbox:
-//   - neighbour clock ±k proposes either h(x±k) (default) OR round((h(x)+h(x±k))/2) if averaging on
-//   - +1 clock always proposes h(x)+1 (unchanged)
+// Averaging toggle affects only neighbour clocks:
+//   - default: g(a,b)=b (copy neighbour height)
+//   - averaging ON: g(a,b)=round((a+b)/2)
+// The +1 clock always does h(x) <- h(x)+1.
+//
+// Choice among candidates uses softmax:
+//    P(i) ∝ r_i * exp(β y_i)
+// with paper normalisation giving r_center=2, r_neighbour=1.
 
 const $ = (sel) => /** @type {HTMLElement} */ (document.querySelector(sel));
 
 const clamp01 = (t) => Math.max(0, Math.min(1, t));
 const lerp = (a, b, t) => a + (b - a) * t;
 
-// Piecewise linear gradient: green -> purple -> blue (castle palette).
+/** Piecewise linear gradient: green -> purple -> blue (castle palette). */
 function castleRGB(t) {
   t = clamp01(t);
-  const c0 = [72, 170, 102];   // green
-  const c1 = [176, 102, 204];  // purple
-  const c2 = [96, 142, 230];   // blue
+  const c0 = [72, 170, 102];
+  const c1 = [176, 102, 204];
+  const c2 = [96, 142, 230];
   let a, b, u;
   if (t < 0.55) { a = c0; b = c1; u = t / 0.55; }
   else { a = c1; b = c2; u = (t - 0.55) / 0.45; }
@@ -33,7 +38,7 @@ function castleRGB(t) {
   ];
 }
 
-// --------- Small deterministic PRNG ----------
+// --------- Deterministic PRNG ----------
 function xmur3(str) {
   let h = 1779033703 ^ str.length;
   for (let i = 0; i < str.length; i++) {
@@ -64,8 +69,8 @@ class RNG {
     const h = xmur3(seedStr);
     this._rand = mulberry32(h());
   }
-  next() { return this._rand(); }             // float in [0,1)
-  int(n) { return (this._rand() * n) | 0; }   // integer 0..n-1
+  next() { return this._rand(); }
+  int(n) { return (this._rand() * n) | 0; }
 }
 
 // --------- Event ring buffer for Brick view ----------
@@ -101,14 +106,14 @@ class EventRing {
   }
 }
 
-// --------- β-BD model on a periodic ring ----------
+// --------- Model ----------
 class BetaBD {
   /** @param {number} N @param {RNG} rng */
   constructor(N, rng) {
     this.setSize(N);
     this.rng = rng;
     this.eventCount = 0;
-    this.microTime = 0; // sweeps or exact (Gillespie)
+    this.microTime = 0;
   }
 
   /** @param {number} N */
@@ -124,59 +129,50 @@ class BetaBD {
   }
 
   /**
-   * One event at a uniformly chosen site x.
-   * Range-R extension: candidates are {+1} ∪ {±k clocks, k=1..R}.
+   * One event at uniformly random x.
    * @returns {{x:number, yNew:number}}
    */
-  stepEvent(beta, betaInf, rNeighbor, rCenter, R, avgOn) {
+  stepEvent(beta, betaInf, rNeighbour, rCenter, R, avgOn) {
     const N = this.N;
     const x = this.rng.int(N);
     const idx = (i) => (i + N) % N;
 
     const hx = this.h[x];
 
-    // Build candidates and rates
-    // Candidate 0 will be the center (+1) move.
-    // Then we append 2R neighbour candidates: +1..+R, -1..-R (order irrelevant).
+    // Candidates: 1 + 2R
     const nCand = 1 + 2 * R;
     const y = new Float64Array(nCand);
     const r = new Float64Array(nCand);
 
-    // Center clock (+1)
+    // center +1
     y[0] = hx + 1;
     r[0] = rCenter;
 
-    // Neighbour clocks
+    // neighbours ±k
     let j = 1;
     for (let k = 1; k <= R; k++) {
       const hr = this.h[idx(x + k)];
       const hl = this.h[idx(x - k)];
 
-      // default neighbour update: copy neighbour
-      // averaging update: average(h(x), h(x±k)) (rounded later)
       y[j] = avgOn ? 0.5 * (hx + hr) : hr;
-      r[j] = rNeighbor;
+      r[j] = rNeighbour;
       j++;
 
       y[j] = avgOn ? 0.5 * (hx + hl) : hl;
-      r[j] = rNeighbor;
+      r[j] = rNeighbour;
       j++;
     }
 
-    // Choose an index
+    // choose index
     let choice = 0;
 
     if (betaInf) {
-      // deterministic max with random tie-breaking
       let m = y[0];
       for (let i = 1; i < nCand; i++) if (y[i] > m) m = y[i];
-
-      // collect argmax set
       const cands = [];
       for (let i = 0; i < nCand; i++) if (y[i] === m) cands.push(i);
       choice = cands[this.rng.int(cands.length)];
     } else {
-      // softmax with numerical stabilisation (shift by max)
       let m = y[0];
       for (let i = 1; i < nCand; i++) if (y[i] > m) m = y[i];
 
@@ -196,9 +192,7 @@ class BetaBD {
       }
     }
 
-    // Apply chosen update
-    // - Center move is integer already.
-    // - Neighbour candidates may be half-integers if averaging is on: round to nearest integer.
+    // apply update (round only matters for averaging; +1 stays integer)
     const yNew = (choice === 0) ? (hx + 1) : Math.round(y[choice]);
     this.h[x] = yNew;
     this.eventCount++;
@@ -206,20 +200,16 @@ class BetaBD {
     return { x, yNew };
   }
 
-  /** Batch events generator */
-  *batch(nEvents, beta, betaInf, rNeighbor, rCenter, R, avgOn, exactClocks) {
+  *batch(nEvents, beta, betaInf, rNeighbour, rCenter, R, avgOn, exactClocks) {
     const N = this.N;
     for (let i = 0; i < nEvents; i++) {
-      const ev = this.stepEvent(beta, betaInf, rNeighbor, rCenter, R, avgOn);
-
+      const ev = this.stepEvent(beta, betaInf, rNeighbour, rCenter, R, avgOn);
       if (exactClocks) {
-        // total event rate is N (one site chosen per event): Δt ~ Exp(N)
         const u = Math.max(1e-12, this.rng.next());
         this.microTime += -Math.log(u) / N;
       } else {
         this.microTime = this.eventCount / N; // sweeps
       }
-
       yield ev;
     }
   }
@@ -238,7 +228,7 @@ class BetaBD {
   }
 }
 
-// --------- Canvas rendering ----------
+// --------- Rendering ----------
 class CanvasView {
   /** @param {HTMLCanvasElement} canvas */
   constructor(canvas) {
@@ -265,50 +255,18 @@ class CanvasView {
     ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
   }
 
-  drawSurface(heights, opts) {
-    const ctx = this.ctx;
-    const W = this.canvas.width, H = this.canvas.height;
-
-    let min = heights[0], max = heights[0];
-    for (let i = 0; i < heights.length; i++) {
-      const v = heights[i];
-      if (v < min) min = v;
-      if (v > max) max = v;
-    }
-
-    const mean = opts.center ? opts.centerValue : 0;
-
-    let yMin = min - mean;
-    let yMax = max - mean;
-    if (yMax - yMin < 2) { yMax += 1; yMin -= 1; }
-    const pad = 0.08 * (yMax - yMin);
-    yMin -= pad; yMax += pad;
-
-    const scaleY = opts.autoScale ? (H / (yMax - yMin)) : (opts.pxPerUnit * this.pixelRatio);
-    const scaleX = W / heights.length;
-
-    ctx.save();
-    ctx.lineWidth = Math.max(1, 1.5 * this.pixelRatio);
-    ctx.strokeStyle = "rgba(96,142,230,0.95)";
-    ctx.beginPath();
-    for (let i = 0; i < heights.length; i++) {
-      const x = (i + 0.5) * scaleX;
-      const yVal = (heights[i] - mean);
-      const y = H - (yVal - yMin) * scaleY;
-      if (i === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
-    }
-    ctx.stroke();
-    ctx.restore();
-  }
-
+  /**
+   * Draw last M events as points.
+   * Returns the y-bounds used so the surface overlay can share coordinates.
+   */
   drawBricks(eventsArray, opts) {
     const ctx = this.ctx;
     const W = this.canvas.width, H = this.canvas.height;
-    if (!eventsArray || eventsArray.length === 0) return;
+    if (!eventsArray || eventsArray.length === 0) return { yMin: -1, yMax: 1 };
 
-    // bounds from events (fast-ish)
-    let yMin = eventsArray[0].y, yMax = eventsArray[0].y;
+    // bounds from events, respecting centering
+    let yMin = eventsArray[0].y - (opts.center ? opts.centerValue : 0);
+    let yMax = yMin;
     for (let i = 0; i < eventsArray.length; i++) {
       const v = eventsArray[i].y - (opts.center ? opts.centerValue : 0);
       if (v < yMin) yMin = v;
@@ -342,6 +300,49 @@ class CanvasView {
       ctx.fillRect(x - s / 2, y - s / 2, s, s);
     }
     ctx.restore();
+
+    return { yMin, yMax };
+  }
+
+  /** Draw surface, optionally sharing y-bounds with bricks. */
+  drawSurface(heights, opts) {
+    const ctx = this.ctx;
+    const W = this.canvas.width, H = this.canvas.height;
+    const mean = opts.center ? opts.centerValue : 0;
+
+    let yMin, yMax;
+    if (opts.yMin != null && opts.yMax != null) {
+      yMin = opts.yMin;
+      yMax = opts.yMax;
+    } else {
+      let min = heights[0] - mean, max = heights[0] - mean;
+      for (let i = 0; i < heights.length; i++) {
+        const v = heights[i] - mean;
+        if (v < min) min = v;
+        if (v > max) max = v;
+      }
+      yMin = min; yMax = max;
+      if (yMax - yMin < 2) { yMax += 1; yMin -= 1; }
+      const pad = 0.08 * (yMax - yMin);
+      yMin -= pad; yMax += pad;
+    }
+
+    const scaleY = opts.autoScale ? (H / (yMax - yMin)) : (opts.pxPerUnit * this.pixelRatio);
+    const scaleX = W / heights.length;
+
+    ctx.save();
+    ctx.lineWidth = Math.max(1, 1.5 * this.pixelRatio);
+    ctx.strokeStyle = "rgba(96,142,230,0.95)";
+    ctx.beginPath();
+    for (let i = 0; i < heights.length; i++) {
+      const x = (i + 0.5) * scaleX;
+      const yVal = heights[i] - mean;
+      const y = H - (yVal - yMin) * scaleY;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+    ctx.restore();
   }
 }
 
@@ -369,18 +370,19 @@ const autoScale = /** @type {HTMLInputElement} */ ($("#autoScale"));
 const beta = /** @type {HTMLInputElement} */ ($("#beta"));
 const betaVal = $("#betaVal");
 const betaInf = /** @type {HTMLInputElement} */ ($("#betaInf"));
+
 const toggleBrick = /** @type {HTMLInputElement} */ ($("#toggleBrick"));
 const toggleSurface = /** @type {HTMLInputElement} */ ($("#toggleSurface"));
+
+const rangeR = /** @type {HTMLInputElement} */ ($("#rangeR"));
+const rangeRVal = $("#rangeRVal");
+const avgMode = /** @type {HTMLInputElement} */ ($("#avgMode"));
 
 const usePaperRates = /** @type {HTMLInputElement} */ ($("#usePaperRates"));
 const subtractDrift = /** @type {HTMLInputElement} */ ($("#subtractDrift"));
 const seedInput = /** @type {HTMLInputElement} */ ($("#seed"));
 const btnReseed = $("#btnReseed");
 const exactClocks = /** @type {HTMLInputElement} */ ($("#exactClocks"));
-
-const rangeR = /** @type {HTMLInputElement} */ ($("#rangeR"));
-const rangeRVal = $("#rangeRVal");
-const avgMode = /** @type {HTMLInputElement} */ ($("#avgMode"));
 
 const btnPause = $("#btnPause");
 const btnStep = $("#btnStep");
@@ -395,6 +397,7 @@ function setNSitesLabel() { nSitesVal.textContent = formatInt(parseInt(nSites.va
 function setMBlocksLabel() { mBlocksVal.textContent = formatInt(parseInt(mBlocks.value, 10)); }
 function setHeightScaleLabel() { heightScaleVal.textContent = formatFloat(parseFloat(heightScale.value), 2); }
 function setBetaLabel() { betaVal.textContent = betaInf.checked ? "∞" : formatFloat(parseFloat(beta.value), 2); }
+function setRangeRLabel() { rangeRVal.textContent = formatInt(parseInt(rangeR.value, 10)); }
 
 speed.addEventListener("input", () => setSpeedLabel());
 nSites.addEventListener("input", () => setNSitesLabel());
@@ -402,15 +405,14 @@ mBlocks.addEventListener("input", () => setMBlocksLabel());
 heightScale.addEventListener("input", () => setHeightScaleLabel());
 beta.addEventListener("input", () => setBetaLabel());
 betaInf.addEventListener("change", () => setBetaLabel());
-
-rangeR.addEventListener("input", () => { rangeRVal.textContent = rangeR.value; });
-rangeRVal.textContent = rangeR.value;
+rangeR.addEventListener("input", () => setRangeRLabel());
 
 setSpeedLabel();
 setNSitesLabel();
 setMBlocksLabel();
 setHeightScaleLabel();
 setBetaLabel();
+setRangeRLabel();
 
 // Simulation state
 let rng = new RNG(seedInput.value);
@@ -461,7 +463,7 @@ document.addEventListener("keydown", (e) => {
 let lastFrame = performance.now();
 let fpsEMA = null;
 
-// Main loop accumulator for events per second
+// Event accumulator
 let accumulator = 0;
 
 function tickOnce(dtSeconds, forceStep=false) {
@@ -477,20 +479,16 @@ function tickOnce(dtSeconds, forceStep=false) {
   const betaValNum = parseFloat(beta.value);
   const betaInfOn = betaInf.checked;
 
-  // Rates:
-  // - paper normalisation uses rCenter=2, neighbour clocks each rate 1
-  // - otherwise: all clocks rate 1 (still works)
   const useRates = usePaperRates.checked;
-  const rNeighbor = 1;
+  const rNeighbour = 1;
   const rCenter = useRates ? 2 : 1;
 
   const exact = exactClocks.checked;
-
   const R = parseInt(rangeR.value, 10);
   const avgOn = avgMode.checked;
 
   if (!paused || forceStep) {
-    for (const ev of model.batch(nEvents, betaValNum, betaInfOn, rNeighbor, rCenter, R, avgOn, exact)) {
+    for (const ev of model.batch(nEvents, betaValNum, betaInfOn, rNeighbour, rCenter, R, avgOn, exact)) {
       events.push(ev.x, ev.yNew, model.eventCount);
     }
   }
@@ -510,10 +508,12 @@ function tickOnce(dtSeconds, forceStep=false) {
   const center = subtractDrift.checked;
   const centerValue = st.mean;
 
+  let sharedBounds = null;
+
   if (doBrick) {
     hudMode.textContent = doSurface ? "Brick + Surface" : "Brick";
     const eventsArray = Array.from(events.iter());
-    view.drawBricks(eventsArray, {
+    sharedBounds = view.drawBricks(eventsArray, {
       N,
       autoScale: autoScale.checked,
       pxPerUnit: parseFloat(heightScale.value),
@@ -530,6 +530,8 @@ function tickOnce(dtSeconds, forceStep=false) {
       pxPerUnit: parseFloat(heightScale.value),
       center,
       centerValue,
+      yMin: sharedBounds ? sharedBounds.yMin : null,
+      yMax: sharedBounds ? sharedBounds.yMax : null,
     });
   }
 }

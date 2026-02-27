@@ -37,7 +37,7 @@
       <canvas id="canvas" width="1200" height="650"></canvas>
 
       <div class="hud" aria-live="polite">
-        <div><span class="k">Mode</span> <span id="hudMode">Surface</span></div>
+        <div><span class="k">Mode</span> <span id="hudMode">Brick + Surface</span></div>
         <div><span class="k">Events</span> <span id="hudEvents">0</span></div>
         <div><span class="k">Sweeps</span> <span id="hudSweeps">0.0</span></div>
         <div><span class="k">Mean(h)</span> <span id="hudMean">0.0</span></div>
@@ -51,7 +51,7 @@
           <span>Brick view (show last M updates as blocks)</span>
         </label>
         <label class="toggle">
-          <input id="toggleSurface" type="checkbox" />
+          <input id="toggleSurface" type="checkbox" checked />
           <span>Surface profile overlay</span>
         </label>
       </div>
@@ -66,7 +66,7 @@
           <input id="speed" type="range" min="1" max="6" step="0.01" value="4" />
           <output id="speedVal" class="mono">10,000</output>
         </div>
-        <p class="hint">This controls how many deposition events are executed per real second (batched each frame).</p>
+        <p class="hint">How many deposition events are executed per real second (batched each frame).</p>
       </div>
 
       <div class="control">
@@ -81,8 +81,8 @@
       <div class="control">
         <label for="mBlocks">Blocks shown (M) — for Brick view</label>
         <div class="row">
-          <input id="mBlocks" type="range" min="200" max="1000000" step="5000" value="200000" />
-          <output id="mBlocksVal" class="mono">200000</output>
+          <input id="mBlocks" type="range" min="200" max="200000" step="500" value="60000" />
+          <output id="mBlocksVal" class="mono">60000</output>
         </div>
         <p class="hint">Brick view draws only the most recent M updates (constant memory).</p>
       </div>
@@ -110,30 +110,30 @@
           <span>β = ∞ (deterministic max rule)</span>
         </label>
         <p class="hint">
-          β=0 is the <b>0-BD</b> regime (the paper’s Brownian Castle scaling limit is proved here). Large β approaches classical ballistic deposition.
+          β=0 is the <b>0-BD</b> regime (Brownian Castle scaling limit is proved here). Large β approaches deterministic “choose the biggest candidate”.
         </p>
       </div>
 
       <div class="control">
         <label for="rangeR">Neighbour range R (number of neighbour clocks per side)</label>
         <div class="row">
-            <input id="rangeR" type="range" min="1" max="50" step="1" value="1" />
-            <output id="rangeRVal" class="mono">1</output>
+          <input id="rangeR" type="range" min="1" max="50" step="1" value="1" />
+          <output id="rangeRVal" class="mono">1</output>
         </div>
         <p class="hint">
-            With range R, each site has 2R neighbour clocks (±1,…,±R) plus the “+1” clock.
-            R=1 recovers the original model.
+          Range R means each site has neighbour clocks for offsets ±1,…,±R plus the “+1” clock.
+          R=1 is the original model.
         </p>
 
         <label class="toggle">
-        <input id="avgMode" type="checkbox" />
-        <span>Average update for neighbour clocks: set h(x) ← average(h(x), h(x±k))</span>
+          <input id="avgMode" type="checkbox" />
+          <span>Average update for neighbour clocks: $h(x)\leftarrow \mathrm{round}\!\big(\tfrac{h(x)+h(x\pm k)}{2}\big)$</span>
         </label>
         <p class="hint">
-            When unchecked (default), neighbour clocks copy the neighbour height: h(x) ← h(x±k).
-            The +1 clock always does h(x) ← h(x)+1 (unchanged).
+          When unchecked (default), neighbour clocks copy: $h(x)\leftarrow h(x\pm k)$.
+          The +1 clock always does $h(x)\leftarrow h(x)+1$ (unchanged).
         </p>
-    </div>
+      </div>
 
       <details class="advanced">
         <summary>Advanced (math fidelity knobs)</summary>
@@ -141,21 +141,20 @@
         <div class="control">
           <label class="toggle">
             <input id="usePaperRates" type="checkbox" checked />
-            <span>Use 0-BD “paper normalisation” (rL=rR=1, rC=2)</span>
+            <span>Use 0-BD “paper normalisation” (neighbour rate 1, +1 rate 2)</span>
           </label>
           <p class="hint">
-            In 0-BD the authors use a graphical construction with three Poisson processes (left/right arrows and dots) with intensities proportional to 1/2, 1/2, and 1.
-            Setting base rates (1,2,1) reproduces those relative frequencies when β=0.
+            At β=0 this matches the paper’s relative frequencies: neighbour clocks are half as frequent as the +1 clock.
           </p>
         </div>
 
         <div class="control">
           <label class="toggle">
-            <input id="subtractDrift" type="checkbox" />
+            <input id="subtractDrift" type="checkbox" checked />
             <span>Subtract mean growth (centering)</span>
           </label>
           <p class="hint">
-            For Brownian-Castle scaling pictures you typically subtract a linear drift in time. Here we subtract the spatial mean height each frame (empirical centering).
+            Brownian-Castle scaling pictures usually subtract a linear drift. Here we subtract the spatial mean height each frame (empirical centering).
           </p>
         </div>
 
@@ -165,7 +164,7 @@
             <input id="seed" type="text" value="castle" spellcheck="false" />
             <button id="btnReseed" class="btn" type="button">Reseed</button>
           </div>
-          <p class="hint">Same seed ⇒ same randomness ⇒ reproducible demos in talks.</p>
+          <p class="hint">Same seed ⇒ reproducible demos.</p>
         </div>
 
         <div class="control">
@@ -184,32 +183,39 @@
       <h2>Mathematics implemented</h2>
       <div class="mathbox">
         <p>
-            Heights live on a 1D periodic lattice: $h:\mathbb{Z}\to\mathbb{Z}$.
-            For a chosen site $x$ we consider $2R+1$ candidates:
+          Heights live on a 1D periodic lattice: $h:\mathbb{Z}\to\mathbb{Z}$.
+          For a chosen site $x$ we consider $2R+1$ candidates (interpretable as $2R+1$ Poisson clocks):
         </p>
+
         <p class="eq">
-            y_{0}=h(x)+1,\qquad
-            y_{+k}=g(h(x),h(x+k)),\qquad
-            y_{-k}=g(h(x),h(x-k)),\quad k=1,\dots,R.
+          $$y_{0}=h(x)+1,\qquad
+          y_{+k}=g\!\bigl(h(x),h(x+k)\bigr),\qquad
+          y_{-k}=g\!\bigl(h(x),h(x-k)\bigr),\qquad
+          k=1,\dots,R.$$
         </p>
+
         <p>
-            By default, $g(a,b)=b$ (copy the neighbour). If “averaging” is enabled, $g(a,b)=\\tfrac{a+b}{2}$ (rounded).
-            The $+1$ candidate is always $h(x)+1$.
+          By default, $g(a,b)=b$ (copy the neighbour). If averaging is enabled,
+          $g(a,b)=\tfrac{a+b}{2}$ (rounded to the nearest integer). The $+1$ candidate is always $h(x)+1$.
         </p>
+
         <p>
-            We sample one candidate using a soft-max rule:
+          We sample one candidate using a soft-max rule:
         </p>
+
         <p class="eq">
-            \\mathbb{P}(y=y_i)=\\frac{r_i e^{\\beta y_i}}{\\sum_j r_j e^{\\beta y_j}}.
+          $$\mathbb{P}(y=y_i)=\frac{r_i\,e^{\beta y_i}}{\sum_j r_j\,e^{\beta y_j}}.$$
         </p>
+
         <p>
-            Then we set $h(x)\\leftarrow y$. In the limit $\\beta\\to\\infty$ this chooses the largest candidate (ties broken randomly).
+          Then we set $h(x)\leftarrow y$.
+          In the limit $\beta\to\infty$ this chooses the largest candidate (ties broken randomly).
         </p>
       </div>
 
       <div class="footer">
         <p class="small">
-          Notes: This simulator implements the microscopic Markov dynamics (the deposition rule) directly. The Brownian Castle is a scaling limit proved for 0-BD (β=0).
+          Notes: This simulator implements the microscopic Markov dynamics directly. The Brownian Castle is a scaling limit proved for 0-BD (β=0).
           Large N and longer runs show the “turrets and crannies” structure more clearly.
         </p>
       </div>
