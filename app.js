@@ -496,7 +496,7 @@ function tickOnce(dtSeconds, forceStep=false) {
   accumulator += blocksPerSec * dtSeconds;
 
   // Prevent “spiral of death” if tab was inactive
-  const maxEventsPerFrame = 2500000;
+  const maxEventsPerFrame = 250000;
   let nEvents = Math.min(maxEventsPerFrame, Math.floor(accumulator));
   if (forceStep) nEvents = Math.min(nEvents, 20000); // when stepping, keep it gentle
   accumulator -= nEvents;
