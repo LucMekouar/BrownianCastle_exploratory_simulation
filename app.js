@@ -1,6 +1,6 @@
 // Brownian Castle / β-Ballistic Deposition simulator
 // ---------------------------------------------------
-// Range-R extension implemented as additional Poisson clocks:
+// Range-R extension implemented as additional Poisson clocks.
 //
 // For each site x:
 //   - a center “+1” clock proposes y0 = h(x)+1
@@ -22,7 +22,6 @@ const $ = (sel) => /** @type {HTMLElement} */ (document.querySelector(sel));
 const clamp01 = (t) => Math.max(0, Math.min(1, t));
 const lerp = (a, b, t) => a + (b - a) * t;
 
-/** Piecewise linear gradient: green -> purple -> blue (castle palette). */
 function castleRGB(t) {
   t = clamp01(t);
   const c0 = [72, 170, 102];
@@ -64,7 +63,6 @@ function mulberry32(seed) {
 }
 
 class RNG {
-  /** @param {string} seedStr */
   constructor(seedStr) {
     const h = xmur3(seedStr);
     this._rand = mulberry32(h());
@@ -75,10 +73,8 @@ class RNG {
 
 // --------- Event ring buffer for Brick view ----------
 class EventRing {
-  /** @param {number} capacity */
   constructor(capacity) { this.resize(capacity); }
 
-  /** @param {number} capacity */
   resize(capacity) {
     this.capacity = Math.max(1, capacity | 0);
     this.x = new Uint32Array(this.capacity);
@@ -88,7 +84,6 @@ class EventRing {
     this.size = 0;
   }
 
-  /** @param {number} x @param {number} y @param {number} idx */
   push(x, y, idx) {
     const i = this.head;
     this.x[i] = x >>> 0;
@@ -108,7 +103,6 @@ class EventRing {
 
 // --------- Model ----------
 class BetaBD {
-  /** @param {number} N @param {RNG} rng */
   constructor(N, rng) {
     this.setSize(N);
     this.rng = rng;
@@ -116,7 +110,6 @@ class BetaBD {
     this.microTime = 0;
   }
 
-  /** @param {number} N */
   setSize(N) {
     this.N = Math.max(4, N | 0);
     this.h = new Int32Array(this.N);
@@ -128,10 +121,6 @@ class BetaBD {
     this.microTime = 0;
   }
 
-  /**
-   * One event at uniformly random x.
-   * @returns {{x:number, yNew:number}}
-   */
   stepEvent(beta, betaInf, rNeighbour, rCenter, R, avgOn) {
     const N = this.N;
     const x = this.rng.int(N);
@@ -139,16 +128,13 @@ class BetaBD {
 
     const hx = this.h[x];
 
-    // Candidates: 1 + 2R
     const nCand = 1 + 2 * R;
     const y = new Float64Array(nCand);
     const r = new Float64Array(nCand);
 
-    // center +1
     y[0] = hx + 1;
     r[0] = rCenter;
 
-    // neighbours ±k
     let j = 1;
     for (let k = 1; k <= R; k++) {
       const hr = this.h[idx(x + k)];
@@ -163,7 +149,6 @@ class BetaBD {
       j++;
     }
 
-    // choose index
     let choice = 0;
 
     if (betaInf) {
@@ -192,7 +177,6 @@ class BetaBD {
       }
     }
 
-    // apply update (round only matters for averaging; +1 stays integer)
     const yNew = (choice === 0) ? (hx + 1) : Math.round(y[choice]);
     this.h[x] = yNew;
     this.eventCount++;
@@ -204,12 +188,14 @@ class BetaBD {
     const N = this.N;
     for (let i = 0; i < nEvents; i++) {
       const ev = this.stepEvent(beta, betaInf, rNeighbour, rCenter, R, avgOn);
+
       if (exactClocks) {
         const u = Math.max(1e-12, this.rng.next());
         this.microTime += -Math.log(u) / N;
       } else {
-        this.microTime = this.eventCount / N; // sweeps
+        this.microTime = this.eventCount / N;
       }
+
       yield ev;
     }
   }
@@ -230,7 +216,6 @@ class BetaBD {
 
 // --------- Rendering ----------
 class CanvasView {
-  /** @param {HTMLCanvasElement} canvas */
   constructor(canvas) {
     this.canvas = canvas;
     this.ctx = canvas.getContext("2d", { alpha: false });
@@ -255,16 +240,11 @@ class CanvasView {
     ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
   }
 
-  /**
-   * Draw last M events as points.
-   * Returns the y-bounds used so the surface overlay can share coordinates.
-   */
   drawBricks(eventsArray, opts) {
     const ctx = this.ctx;
     const W = this.canvas.width, H = this.canvas.height;
     if (!eventsArray || eventsArray.length === 0) return { yMin: -1, yMax: 1 };
 
-    // bounds from events, respecting centering
     let yMin = eventsArray[0].y - (opts.center ? opts.centerValue : 0);
     let yMax = yMin;
     for (let i = 0; i < eventsArray.length; i++) {
@@ -304,7 +284,6 @@ class CanvasView {
     return { yMin, yMax };
   }
 
-  /** Draw surface, optionally sharing y-bounds with bricks. */
   drawSurface(heights, opts) {
     const ctx = this.ctx;
     const W = this.canvas.width, H = this.canvas.height;
@@ -363,8 +342,7 @@ const nSites = /** @type {HTMLInputElement} */ ($("#nSites"));
 const nSitesVal = $("#nSitesVal");
 const mBlocks = /** @type {HTMLInputElement} */ ($("#mBlocks"));
 const mBlocksVal = $("#mBlocksVal");
-const heightScale = /** @type {HTMLInputElement} */ ($("#heightScale"));
-const heightScaleVal = $("#heightScaleVal");
+
 const autoScale = /** @type {HTMLInputElement} */ ($("#autoScale"));
 
 const beta = /** @type {HTMLInputElement} */ ($("#beta"));
@@ -388,6 +366,9 @@ const btnPause = $("#btnPause");
 const btnStep = $("#btnStep");
 const btnReset = $("#btnReset");
 
+// pxPerUnit kept as a fallback if Auto-scale is turned off
+const FALLBACK_PX_PER_UNIT = 1.0;
+
 function formatInt(n) { return n.toLocaleString(undefined, { maximumFractionDigits: 0 }); }
 function formatFloat(x, d=2) { return x.toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d }); }
 function speedFromLogSlider(v) { return Math.floor(Math.pow(10, parseFloat(v))); }
@@ -395,14 +376,12 @@ function speedFromLogSlider(v) { return Math.floor(Math.pow(10, parseFloat(v)));
 function setSpeedLabel() { const s = speedFromLogSlider(speed.value); speedVal.textContent = formatInt(s); return s; }
 function setNSitesLabel() { nSitesVal.textContent = formatInt(parseInt(nSites.value, 10)); }
 function setMBlocksLabel() { mBlocksVal.textContent = formatInt(parseInt(mBlocks.value, 10)); }
-function setHeightScaleLabel() { heightScaleVal.textContent = formatFloat(parseFloat(heightScale.value), 2); }
 function setBetaLabel() { betaVal.textContent = betaInf.checked ? "∞" : formatFloat(parseFloat(beta.value), 2); }
 function setRangeRLabel() { rangeRVal.textContent = formatInt(parseInt(rangeR.value, 10)); }
 
 speed.addEventListener("input", () => setSpeedLabel());
 nSites.addEventListener("input", () => setNSitesLabel());
 mBlocks.addEventListener("input", () => setMBlocksLabel());
-heightScale.addEventListener("input", () => setHeightScaleLabel());
 beta.addEventListener("input", () => setBetaLabel());
 betaInf.addEventListener("change", () => setBetaLabel());
 rangeR.addEventListener("input", () => setRangeRLabel());
@@ -410,7 +389,6 @@ rangeR.addEventListener("input", () => setRangeRLabel());
 setSpeedLabel();
 setNSitesLabel();
 setMBlocksLabel();
-setHeightScaleLabel();
 setBetaLabel();
 setRangeRLabel();
 
@@ -516,7 +494,7 @@ function tickOnce(dtSeconds, forceStep=false) {
     sharedBounds = view.drawBricks(eventsArray, {
       N,
       autoScale: autoScale.checked,
-      pxPerUnit: parseFloat(heightScale.value),
+      pxPerUnit: FALLBACK_PX_PER_UNIT,
       center,
       centerValue,
     });
@@ -527,7 +505,7 @@ function tickOnce(dtSeconds, forceStep=false) {
   if (doSurface) {
     view.drawSurface(model.h, {
       autoScale: autoScale.checked,
-      pxPerUnit: parseFloat(heightScale.value),
+      pxPerUnit: FALLBACK_PX_PER_UNIT,
       center,
       centerValue,
       yMin: sharedBounds ? sharedBounds.yMin : null,

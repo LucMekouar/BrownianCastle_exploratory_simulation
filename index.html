@@ -37,7 +37,7 @@
       <canvas id="canvas" width="1200" height="650"></canvas>
 
       <div class="hud" aria-live="polite">
-        <div><span class="k">Mode</span> <span id="hudMode">Brick + Surface</span></div>
+        <div><span class="k">Mode</span> <span id="hudMode">Brick</span></div>
         <div><span class="k">Events</span> <span id="hudEvents">0</span></div>
         <div><span class="k">Sweeps</span> <span id="hudSweeps">0.0</span></div>
         <div><span class="k">Mean(h)</span> <span id="hudMean">0.0</span></div>
@@ -51,7 +51,7 @@
           <span>Brick view (show last M updates as blocks)</span>
         </label>
         <label class="toggle">
-          <input id="toggleSurface" type="checkbox" checked />
+          <input id="toggleSurface" type="checkbox" />
           <span>Surface profile overlay</span>
         </label>
       </div>
@@ -72,8 +72,8 @@
       <div class="control">
         <label for="nSites">Columns (system size N)</label>
         <div class="row">
-          <input id="nSites" type="range" min="32" max="2048" step="1" value="512" />
-          <output id="nSitesVal" class="mono">512</output>
+          <input id="nSites" type="range" min="32" max="2048" step="1" value="611" />
+          <output id="nSitesVal" class="mono">611</output>
         </div>
         <p class="hint">We simulate on a periodic ring (no boundary artifacts).</p>
       </div>
@@ -81,22 +81,19 @@
       <div class="control">
         <label for="mBlocks">Blocks shown (M) — for Brick view</label>
         <div class="row">
-          <input id="mBlocks" type="range" min="200" max="200000" step="500" value="60000" />
-          <output id="mBlocksVal" class="mono">60000</output>
+          <input id="mBlocks" type="range" min="200" max="200000" step="500" value="146200" />
+          <output id="mBlocksVal" class="mono">146,200</output>
         </div>
         <p class="hint">Brick view draws only the most recent M updates (constant memory).</p>
       </div>
 
+      <!-- Height scale slider removed (you always use auto-scale) -->
       <div class="control">
-        <label for="heightScale">Height scale (px per height unit)</label>
-        <div class="row">
-          <input id="heightScale" type="range" min="0.2" max="10" step="0.05" value="1.2" />
-          <output id="heightScaleVal" class="mono">1.20</output>
-        </div>
         <label class="toggle">
           <input id="autoScale" type="checkbox" checked />
           <span>Auto-scale height</span>
         </label>
+        <p class="hint">When enabled, the renderer fits the full current height range into the canvas.</p>
       </div>
 
       <div class="control">
@@ -110,7 +107,7 @@
           <span>β = ∞ (deterministic max rule)</span>
         </label>
         <p class="hint">
-          β=0 is the <b>0-BD</b> regime (Brownian Castle scaling limit is proved here). Large β approaches deterministic “choose the biggest candidate”.
+          β=0 is the 0-BD regime (Brownian Castle scaling limit is proved here). Large β approaches deterministic “choose the biggest candidate”.
         </p>
       </div>
 
@@ -121,8 +118,7 @@
           <output id="rangeRVal" class="mono">1</output>
         </div>
         <p class="hint">
-          Range R means each site has neighbour clocks for offsets ±1,…,±R plus the “+1” clock.
-          R=1 is the original model.
+          Range R means each site has neighbour clocks for offsets ±1,…,±R plus the “+1” clock. R=1 is the original model.
         </p>
 
         <label class="toggle">
@@ -150,7 +146,7 @@
 
         <div class="control">
           <label class="toggle">
-            <input id="subtractDrift" type="checkbox" checked />
+            <input id="subtractDrift" type="checkbox" />
             <span>Subtract mean growth (centering)</span>
           </label>
           <p class="hint">
@@ -173,7 +169,7 @@
             <span>Exact continuous time (Gillespie) instead of event-count time</span>
           </label>
           <p class="hint">
-            If enabled, we sample waiting times Δt ~ Exp(N) between events. Otherwise we treat time as “sweeps” = events/N.
+            If enabled, we sample waiting times $\Delta t\sim\mathrm{Exp}(N)$ between events. Otherwise we treat time as “sweeps” = events/N.
           </p>
         </div>
       </details>
