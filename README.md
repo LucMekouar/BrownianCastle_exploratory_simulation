@@ -4,6 +4,8 @@ Interactive, browser-based simulator of a 1D growth model from Cannizzaro–Hair
 
 This is a **static site** (HTML/CSS/JS only), so it’s easy to host on **GitHub Pages**.
 
+Code written with the assistance of ChatGPT 5.2 (version Feb 2026) - prompts and responses available upon request.
+
 ---
 
 ## Description
