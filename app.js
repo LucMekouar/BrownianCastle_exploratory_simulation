@@ -1,23 +1,23 @@
 // Brownian Castle / β-Ballistic Deposition simulator
 // ---------------------------------------------------
-// Implements the microscopic update rule from Cannizzaro–Hairer “The Brownian Castle”
-// for β=0 (0-BD) and extends it to the β-softmax family.
+// Range-R extension implemented as additional Poisson clocks:
+// For each site x, there are 2R neighbour clocks (±1..±R) and a +1 clock.
 //
-// Model (one event at x):
-//   yL = h(x-1), yC = h(x)+1, yR = h(x+1)
-//   P(choose i) ∝ r_i * exp(β * y_i)
-//   then h(x) ← y_i
+// When a clock "rings", it proposes a candidate height y_i.
+// We choose among candidates via softmax:
+//   P(i) ∝ r_i * exp(β y_i)
+// Then set h(x) ← y_i.
 //
-// For numerical stability we compute exp(β*(y_i - max(y))) (shifted softmax).
+// Averaging checkbox:
+//   - neighbour clock ±k proposes either h(x±k) (default) OR round((h(x)+h(x±k))/2) if averaging on
+//   - +1 clock always proposes h(x)+1 (unchanged)
 
 const $ = (sel) => /** @type {HTMLElement} */ (document.querySelector(sel));
 
 const clamp01 = (t) => Math.max(0, Math.min(1, t));
 const lerp = (a, b, t) => a + (b - a) * t;
 
-/** Piecewise linear gradient: green -> purple -> blue (castle palette).
- *  t in [0,1], where t=0 is oldest and t=1 is newest.
- */
+// Piecewise linear gradient: green -> purple -> blue (castle palette).
 function castleRGB(t) {
   t = clamp01(t);
   const c0 = [72, 170, 102];   // green
@@ -33,8 +33,7 @@ function castleRGB(t) {
   ];
 }
 
-// --------- Small deterministic PRNG (mulberry32) ----------
-// We hash an arbitrary seed string → uint32 then use mulberry32.
+// --------- Small deterministic PRNG ----------
 function xmur3(str) {
   let h = 1779033703 ^ str.length;
   for (let i = 0; i < str.length; i++) {
@@ -69,37 +68,35 @@ class RNG {
   int(n) { return (this._rand() * n) | 0; }   // integer 0..n-1
 }
 
-// --------- Event buffer for “brick view” ----------
+// --------- Event ring buffer for Brick view ----------
 class EventRing {
   /** @param {number} capacity */
-  constructor(capacity) {
-    this.resize(capacity);
-  }
+  constructor(capacity) { this.resize(capacity); }
+
   /** @param {number} capacity */
   resize(capacity) {
     this.capacity = Math.max(1, capacity | 0);
     this.x = new Uint32Array(this.capacity);
     this.y = new Int32Array(this.capacity);
-    this.type = new Uint8Array(this.capacity); // 0=L,1=C,2=R
-    this.idx = new Uint32Array(this.capacity); // event index (monotone, for aging)
+    this.idx = new Uint32Array(this.capacity);
     this.head = 0;
     this.size = 0;
   }
-  /** @param {number} x @param {number} y @param {number} type @param {number} idx */
-  push(x, y, type, idx) {
+
+  /** @param {number} x @param {number} y @param {number} idx */
+  push(x, y, idx) {
     const i = this.head;
     this.x[i] = x >>> 0;
     this.y[i] = y | 0;
-    this.type[i] = type & 255;
     this.idx[i] = idx >>> 0;
     this.head = (this.head + 1) % this.capacity;
     this.size = Math.min(this.size + 1, this.capacity);
   }
-  // Iterate from newest → oldest
+
   *iter() {
     for (let k = 0; k < this.size; k++) {
       const i = (this.head - 1 - k + this.capacity) % this.capacity;
-      yield { x: this.x[i], y: this.y[i], type: this.type[i], idx: this.idx[i] };
+      yield { x: this.x[i], y: this.y[i], idx: this.idx[i] };
     }
   }
 }
@@ -111,13 +108,13 @@ class BetaBD {
     this.setSize(N);
     this.rng = rng;
     this.eventCount = 0;
-    this.microTime = 0; // Either sweeps (events/N) or exact time if Gillespie
+    this.microTime = 0; // sweeps or exact (Gillespie)
   }
 
   /** @param {number} N */
   setSize(N) {
     this.N = Math.max(4, N | 0);
-    this.h = new Int32Array(this.N); // start at 0
+    this.h = new Int32Array(this.N);
   }
 
   reset() {
@@ -126,62 +123,103 @@ class BetaBD {
     this.microTime = 0;
   }
 
-  /** One event. Returns {x, yNew, type} for brick rendering. */
-  stepEvent(beta, betaInf, rL, rC, rR) {
+  /**
+   * One event at a uniformly chosen site x.
+   * Range-R extension: candidates are {+1} ∪ {±k clocks, k=1..R}.
+   * @returns {{x:number, yNew:number}}
+   */
+  stepEvent(beta, betaInf, rNeighbor, rCenter, R, avgOn) {
     const N = this.N;
     const x = this.rng.int(N);
-    const xm = (x - 1 + N) % N;
-    const xp = (x + 1) % N;
+    const idx = (i) => (i + N) % N;
 
-    const yL = this.h[xm];
-    const yC = this.h[x] + 1;
-    const yR = this.h[xp];
+    const hx = this.h[x];
 
-    let choice = 1; // default C
+    // Build candidates and rates
+    // Candidate 0 will be the center (+1) move.
+    // Then we append 2R neighbour candidates: +1..+R, -1..-R (order irrelevant).
+    const nCand = 1 + 2 * R;
+    const y = new Float64Array(nCand);
+    const r = new Float64Array(nCand);
 
-    if (betaInf) {
-      // Deterministic max rule (with random tie-breaking)
-      const m = Math.max(yL, yC, yR);
-      const cands = [];
-      if (yL === m) cands.push(0);
-      if (yC === m) cands.push(1);
-      if (yR === m) cands.push(2);
-      choice = cands[this.rng.int(cands.length)];
-    } else {
-      // Shifted softmax: exp(beta*(y - max)) keeps numbers in [0,1] when beta>0.
-      const m = Math.max(yL, yC, yR);
-      const w0 = rL * Math.exp(beta * (yL - m));
-      const w1 = rC * Math.exp(beta * (yC - m));
-      const w2 = rR * Math.exp(beta * (yR - m));
-      const s = w0 + w1 + w2;
+    // Center clock (+1)
+    y[0] = hx + 1;
+    r[0] = rCenter;
 
-      // Draw u in [0,1)
-      const u = this.rng.next() * s;
-      if (u < w0) choice = 0;
-      else if (u < w0 + w1) choice = 1;
-      else choice = 2;
+    // Neighbour clocks
+    let j = 1;
+    for (let k = 1; k <= R; k++) {
+      const hr = this.h[idx(x + k)];
+      const hl = this.h[idx(x - k)];
+
+      // default neighbour update: copy neighbour
+      // averaging update: average(h(x), h(x±k)) (rounded later)
+      y[j] = avgOn ? 0.5 * (hx + hr) : hr;
+      r[j] = rNeighbor;
+      j++;
+
+      y[j] = avgOn ? 0.5 * (hx + hl) : hl;
+      r[j] = rNeighbor;
+      j++;
     }
 
-    const yNew = (choice === 0) ? yL : (choice === 1) ? yC : yR;
+    // Choose an index
+    let choice = 0;
+
+    if (betaInf) {
+      // deterministic max with random tie-breaking
+      let m = y[0];
+      for (let i = 1; i < nCand; i++) if (y[i] > m) m = y[i];
+
+      // collect argmax set
+      const cands = [];
+      for (let i = 0; i < nCand; i++) if (y[i] === m) cands.push(i);
+      choice = cands[this.rng.int(cands.length)];
+    } else {
+      // softmax with numerical stabilisation (shift by max)
+      let m = y[0];
+      for (let i = 1; i < nCand; i++) if (y[i] > m) m = y[i];
+
+      let sum = 0;
+      const w = new Float64Array(nCand);
+      for (let i = 0; i < nCand; i++) {
+        const wi = r[i] * Math.exp(beta * (y[i] - m));
+        w[i] = wi;
+        sum += wi;
+      }
+
+      const u = this.rng.next() * sum;
+      let acc = 0;
+      for (let i = 0; i < nCand; i++) {
+        acc += w[i];
+        if (u <= acc) { choice = i; break; }
+      }
+    }
+
+    // Apply chosen update
+    // - Center move is integer already.
+    // - Neighbour candidates may be half-integers if averaging is on: round to nearest integer.
+    const yNew = (choice === 0) ? (hx + 1) : Math.round(y[choice]);
     this.h[x] = yNew;
     this.eventCount++;
 
-    return { x, yNew, type: choice };
+    return { x, yNew };
   }
 
-  /** Batch events. If exactClocks, advance microTime by Exp(N) each event. */
-  *batch(nEvents, beta, betaInf, rL, rC, rR, exactClocks) {
+  /** Batch events generator */
+  *batch(nEvents, beta, betaInf, rNeighbor, rCenter, R, avgOn, exactClocks) {
     const N = this.N;
     for (let i = 0; i < nEvents; i++) {
-      const ev = this.stepEvent(beta, betaInf, rL, rC, rR);
+      const ev = this.stepEvent(beta, betaInf, rNeighbor, rCenter, R, avgOn);
+
       if (exactClocks) {
-        // Gillespie waiting time for total rate N: Δt ~ Exp(N)
+        // total event rate is N (one site chosen per event): Δt ~ Exp(N)
         const u = Math.max(1e-12, this.rng.next());
         this.microTime += -Math.log(u) / N;
       } else {
-        // “sweeps” time
-        this.microTime = this.eventCount / N;
+        this.microTime = this.eventCount / N; // sweeps
       }
+
       yield ev;
     }
   }
@@ -227,12 +265,10 @@ class CanvasView {
     ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
   }
 
-  /** @param {Int32Array} heights */
   drawSurface(heights, opts) {
     const ctx = this.ctx;
     const W = this.canvas.width, H = this.canvas.height;
 
-    // Compute min/max for scaling.
     let min = heights[0], max = heights[0];
     for (let i = 0; i < heights.length; i++) {
       const v = heights[i];
@@ -240,35 +276,17 @@ class CanvasView {
       if (v > max) max = v;
     }
 
-    // Optional centering.
     const mean = opts.center ? opts.centerValue : 0;
 
-    // Expand bounds a bit for aesthetics.
     let yMin = min - mean;
     let yMax = max - mean;
     if (yMax - yMin < 2) { yMax += 1; yMin -= 1; }
     const pad = 0.08 * (yMax - yMin);
     yMin -= pad; yMax += pad;
 
-    // Scale.
     const scaleY = opts.autoScale ? (H / (yMax - yMin)) : (opts.pxPerUnit * this.pixelRatio);
     const scaleX = W / heights.length;
 
-    // Draw faint grid
-    ctx.save();
-    ctx.strokeStyle = "rgba(0,0,0,0.06)";
-    ctx.lineWidth = 1;
-    const gridN = 6;
-    for (let k = 1; k < gridN; k++) {
-      const y = (k / gridN) * H;
-      ctx.beginPath();
-      ctx.moveTo(0, y);
-      ctx.lineTo(W, y);
-      ctx.stroke();
-    }
-    ctx.restore();
-
-    // Polyline.
     ctx.save();
     ctx.lineWidth = Math.max(1, 1.5 * this.pixelRatio);
     ctx.strokeStyle = "rgba(96,142,230,0.95)";
@@ -282,78 +300,48 @@ class CanvasView {
     }
     ctx.stroke();
     ctx.restore();
-
-    // Baseline at y=0 (after centering), if visible.
-    const y0 = H - (0 - yMin) * scaleY;
-    if (y0 >= 0 && y0 <= H) {
-      ctx.save();
-      ctx.strokeStyle = "rgba(0,0,0,0.10)";
-      ctx.beginPath();
-      ctx.moveTo(0, y0);
-      ctx.lineTo(W, y0);
-      ctx.stroke();
-      ctx.restore();
-    }
-
-    return { yMin, yMax, mean, scaleY, scaleX };
   }
 
-  /** Draw last M events as “bricks” (points). */
-  drawBricks(eventsIter, opts) {
+  drawBricks(eventsArray, opts) {
     const ctx = this.ctx;
     const W = this.canvas.width, H = this.canvas.height;
+    if (!eventsArray || eventsArray.length === 0) return;
 
-    // Determine bounds from a sample of events (fast) OR use provided bounds.
-    let yMin = opts.yMin, yMax = opts.yMax;
-    if (yMin === null || yMax === null) {
-      yMin = 0; yMax = 1;
-      let first = true;
-      let count = 0;
-      for (const ev of eventsIter) {
-        const y = ev.y - (opts.center ? opts.centerValue : 0);
-        if (first) { yMin = y; yMax = y; first = false; }
-        else { if (y < yMin) yMin = y; if (y > yMax) yMax = y; }
-        count++;
-        if (count > 2000) break; // sample cap
-      }
-      if (yMax - yMin < 2) { yMax += 1; yMin -= 1; }
-      const pad = 0.12 * (yMax - yMin);
-      yMin -= pad; yMax += pad;
+    // bounds from events (fast-ish)
+    let yMin = eventsArray[0].y, yMax = eventsArray[0].y;
+    for (let i = 0; i < eventsArray.length; i++) {
+      const v = eventsArray[i].y - (opts.center ? opts.centerValue : 0);
+      if (v < yMin) yMin = v;
+      if (v > yMax) yMax = v;
     }
+    if (yMax - yMin < 2) { yMax += 1; yMin -= 1; }
+    const pad = 0.12 * (yMax - yMin);
+    yMin -= pad; yMax += pad;
 
     const scaleY = opts.autoScale ? (H / (yMax - yMin)) : (opts.pxPerUnit * this.pixelRatio);
     const scaleX = W / opts.N;
 
-    // Re-iterate (generator was consumed if we sampled). So we expect a cached array of events.
-    const events = opts.eventsArray; // newest→oldest
-    if (!events || events.length === 0) return { yMin, yMax };
-
-    const newestIdx = events[0].idx;
-    const oldestIdx = events[events.length - 1].idx;
+    const newestIdx = eventsArray[0].idx;
+    const oldestIdx = eventsArray[eventsArray.length - 1].idx;
     const span = Math.max(1, newestIdx - oldestIdx);
 
-    // Draw bricks. Older bricks fade out.
     ctx.save();
-    for (let k = 0; k < events.length; k++) {
-      const ev = events[k];
-      const age01 = (newestIdx - ev.idx) / span; // 0=newest, 1=oldest
-      const alphaTmp = 1.0 - age01;
+    for (let k = 0; k < eventsArray.length; k++) {
+      const ev = eventsArray[k];
+      const age01 = (newestIdx - ev.idx) / span;
+
       const x = (ev.x + 0.5) * scaleX;
       const yVal = ev.y - (opts.center ? opts.centerValue : 0);
       const y = H - (yVal - yMin) * scaleY;
 
-      // Color by age (old→green, new→blue) with a tiny height tint.
-      // This matches the “Brownian Castle” look: dense point clouds with a vertical colour drift.
       const rgb = castleRGB(1.0 - age01);
-      const alpha = 0.20 + 0.65 * (1.0 - 0.35 * age01); // keep older points visible
+      const alpha = 0.20 + 0.65 * (1.0 - 0.35 * age01);
       ctx.fillStyle = `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${alpha})`;
 
       const s = Math.max(1, 1.6 * this.pixelRatio);
-      ctx.fillRect(x - s/2, y - s/2, s, s);
+      ctx.fillRect(x - s / 2, y - s / 2, s, s);
     }
     ctx.restore();
-
-    return { yMin, yMax };
   }
 }
 
@@ -390,37 +378,23 @@ const seedInput = /** @type {HTMLInputElement} */ ($("#seed"));
 const btnReseed = $("#btnReseed");
 const exactClocks = /** @type {HTMLInputElement} */ ($("#exactClocks"));
 
+const rangeR = /** @type {HTMLInputElement} */ ($("#rangeR"));
+const rangeRVal = $("#rangeRVal");
+const avgMode = /** @type {HTMLInputElement} */ ($("#avgMode"));
+
 const btnPause = $("#btnPause");
 const btnStep = $("#btnStep");
 const btnReset = $("#btnReset");
 
-function formatInt(n) {
-  return n.toLocaleString(undefined, { maximumFractionDigits: 0 });
-}
-function formatFloat(x, d=2) {
-  return x.toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d });
-}
-function speedFromLogSlider(v) {
-  // slider is log10 blocks/sec in [1,6] => 10 .. 1,000,000
-  return Math.floor(Math.pow(10, parseFloat(v)));
-}
-function setSpeedLabel() {
-  const s = speedFromLogSlider(speed.value);
-  speedVal.textContent = formatInt(s);
-  return s;
-}
-function setNSitesLabel() {
-  nSitesVal.textContent = formatInt(parseInt(nSites.value, 10));
-}
-function setMBlocksLabel() {
-  mBlocksVal.textContent = formatInt(parseInt(mBlocks.value, 10));
-}
-function setHeightScaleLabel() {
-  heightScaleVal.textContent = formatFloat(parseFloat(heightScale.value), 2);
-}
-function setBetaLabel() {
-  betaVal.textContent = betaInf.checked ? "∞" : formatFloat(parseFloat(beta.value), 2);
-}
+function formatInt(n) { return n.toLocaleString(undefined, { maximumFractionDigits: 0 }); }
+function formatFloat(x, d=2) { return x.toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d }); }
+function speedFromLogSlider(v) { return Math.floor(Math.pow(10, parseFloat(v))); }
+
+function setSpeedLabel() { const s = speedFromLogSlider(speed.value); speedVal.textContent = formatInt(s); return s; }
+function setNSitesLabel() { nSitesVal.textContent = formatInt(parseInt(nSites.value, 10)); }
+function setMBlocksLabel() { mBlocksVal.textContent = formatInt(parseInt(mBlocks.value, 10)); }
+function setHeightScaleLabel() { heightScaleVal.textContent = formatFloat(parseFloat(heightScale.value), 2); }
+function setBetaLabel() { betaVal.textContent = betaInf.checked ? "∞" : formatFloat(parseFloat(beta.value), 2); }
 
 speed.addEventListener("input", () => setSpeedLabel());
 nSites.addEventListener("input", () => setNSitesLabel());
@@ -428,6 +402,9 @@ mBlocks.addEventListener("input", () => setMBlocksLabel());
 heightScale.addEventListener("input", () => setHeightScaleLabel());
 beta.addEventListener("input", () => setBetaLabel());
 betaInf.addEventListener("change", () => setBetaLabel());
+
+rangeR.addEventListener("input", () => { rangeRVal.textContent = rangeR.value; });
+rangeRVal.textContent = rangeR.value;
 
 setSpeedLabel();
 setNSitesLabel();
@@ -446,9 +423,7 @@ function rebuildModel() {
   events = new EventRing(parseInt(mBlocks.value, 10));
 }
 
-btnReseed.addEventListener("click", () => {
-  rebuildModel();
-});
+btnReseed.addEventListener("click", () => rebuildModel());
 
 btnReset.addEventListener("click", () => {
   model.reset();
@@ -456,8 +431,7 @@ btnReset.addEventListener("click", () => {
 });
 
 nSites.addEventListener("change", () => {
-  const N = parseInt(nSites.value, 10);
-  model.setSize(N);
+  model.setSize(parseInt(nSites.value, 10));
   model.reset();
   events.resize(parseInt(mBlocks.value, 10));
 });
@@ -495,37 +469,38 @@ function tickOnce(dtSeconds, forceStep=false) {
   const blocksPerSec = speedFromLogSlider(speed.value);
   accumulator += blocksPerSec * dtSeconds;
 
-  // Prevent “spiral of death” if tab was inactive
   const maxEventsPerFrame = 250000;
   let nEvents = Math.min(maxEventsPerFrame, Math.floor(accumulator));
-  if (forceStep) nEvents = Math.min(nEvents, 20000); // when stepping, keep it gentle
+  if (forceStep) nEvents = Math.min(nEvents, 20000);
   accumulator -= nEvents;
 
   const betaValNum = parseFloat(beta.value);
   const betaInfOn = betaInf.checked;
 
+  // Rates:
+  // - paper normalisation uses rCenter=2, neighbour clocks each rate 1
+  // - otherwise: all clocks rate 1 (still works)
   const useRates = usePaperRates.checked;
-  const rL = useRates ? 1 : 1;
-  const rC = useRates ? 2 : 1;
-  const rR = useRates ? 1 : 1;
+  const rNeighbor = 1;
+  const rCenter = useRates ? 2 : 1;
 
   const exact = exactClocks.checked;
 
-  // Run batch and record events for brick view
+  const R = parseInt(rangeR.value, 10);
+  const avgOn = avgMode.checked;
+
   if (!paused || forceStep) {
-    for (const ev of model.batch(nEvents, betaValNum, betaInfOn, rL, rC, rR, exact)) {
-      events.push(ev.x, ev.yNew, ev.type, model.eventCount);
+    for (const ev of model.batch(nEvents, betaValNum, betaInfOn, rNeighbor, rCenter, R, avgOn, exact)) {
+      events.push(ev.x, ev.yNew, model.eventCount);
     }
   }
 
-  // Update HUD stats
   const st = model.stats();
   hudEvents.textContent = formatInt(model.eventCount);
   hudSweeps.textContent = formatFloat(model.microTime, 2);
   hudMean.textContent = formatFloat(st.mean, 2);
   hudMinMax.textContent = `${formatInt(st.min)} / ${formatInt(st.max)}`;
 
-  // Render
   view.resizeToDisplaySize();
   view.clear();
 
@@ -537,17 +512,13 @@ function tickOnce(dtSeconds, forceStep=false) {
 
   if (doBrick) {
     hudMode.textContent = doSurface ? "Brick + Surface" : "Brick";
-    // Cache events newest→oldest for one pass rendering
     const eventsArray = Array.from(events.iter());
-    view.drawBricks(events.iter(), {
+    view.drawBricks(eventsArray, {
       N,
       autoScale: autoScale.checked,
       pxPerUnit: parseFloat(heightScale.value),
       center,
       centerValue,
-      yMin: null,
-      yMax: null,
-      eventsArray,
     });
   } else {
     hudMode.textContent = "Surface";
@@ -567,7 +538,6 @@ function animate(now) {
   const dt = Math.min(0.05, (now - lastFrame) / 1000);
   lastFrame = now;
 
-  // FPS exponential moving average
   const fps = 1 / Math.max(1e-6, dt);
   fpsEMA = fpsEMA === null ? fps : (0.90 * fpsEMA + 0.10 * fps);
   hudFps.textContent = formatFloat(fpsEMA, 1);

@@ -114,6 +114,27 @@
         </p>
       </div>
 
+      <div class="control">
+        <label for="rangeR">Neighbour range R (number of neighbour clocks per side)</label>
+        <div class="row">
+            <input id="rangeR" type="range" min="1" max="50" step="1" value="1" />
+            <output id="rangeRVal" class="mono">1</output>
+        </div>
+        <p class="hint">
+            With range R, each site has 2R neighbour clocks (±1,…,±R) plus the “+1” clock.
+            R=1 recovers the original model.
+        </p>
+
+        <label class="toggle">
+        <input id="avgMode" type="checkbox" />
+        <span>Average update for neighbour clocks: set h(x) ← average(h(x), h(x±k))</span>
+        </label>
+        <p class="hint">
+            When unchecked (default), neighbour clocks copy the neighbour height: h(x) ← h(x±k).
+            The +1 clock always does h(x) ← h(x)+1 (unchanged).
+        </p>
+    </div>
+
       <details class="advanced">
         <summary>Advanced (math fidelity knobs)</summary>
 
@@ -163,20 +184,26 @@
       <h2>Mathematics implemented</h2>
       <div class="mathbox">
         <p>
-          Heights live on a 1D lattice: $h:\mathbb{Z}\to\mathbb{Z}$. When site $x$ “rings”, consider three candidates:
+            Heights live on a 1D periodic lattice: $h:\mathbb{Z}\to\mathbb{Z}$.
+            For a chosen site $x$ we consider $2R+1$ candidates:
         </p>
         <p class="eq">
-          $y_L = h(x-1),\quad y_C = h(x)+1,\quad y_R = h(x+1)$.
+            y_{0}=h(x)+1,\qquad
+            y_{+k}=g(h(x),h(x+k)),\qquad
+            y_{-k}=g(h(x),h(x-k)),\quad k=1,\dots,R.
         </p>
         <p>
-          We sample one of them using a soft-max (finite temperature) rule:
+            By default, $g(a,b)=b$ (copy the neighbour). If “averaging” is enabled, $g(a,b)=\\tfrac{a+b}{2}$ (rounded).
+            The $+1$ candidate is always $h(x)+1$.
+        </p>
+        <p>
+            We sample one candidate using a soft-max rule:
         </p>
         <p class="eq">
-          $\mathbb{P}(y=y_i)=\dfrac{r_i e^{\beta y_i}}{\sum_{j\in\{L,C,R\}} r_j e^{\beta y_j}}.$
+            \\mathbb{P}(y=y_i)=\\frac{r_i e^{\\beta y_i}}{\\sum_j r_j e^{\\beta y_j}}.
         </p>
         <p>
-          Then we set $h(x)\leftarrow y$. In the limit $\beta\to\infty$ this concentrates on the maximum and matches classical ballistic deposition
-          $h(x)\mapsto\max\{h(x-1),h(x)+1,h(x+1)\}$.
+            Then we set $h(x)\\leftarrow y$. In the limit $\\beta\\to\\infty$ this chooses the largest candidate (ties broken randomly).
         </p>
       </div>
 
