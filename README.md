@@ -32,7 +32,7 @@ The visualisation is a “brick view” point cloud (the castle look), optionall
 
 ## Live demo (GitHub Pages)
 
-demo should be available at: `https://lucmekouar.github.io/BC_simulation/`
+demo should be available at: `https://lucmekouar.github.io/BrownianCastle_exploratory_simulation/`
 
 ---
 
